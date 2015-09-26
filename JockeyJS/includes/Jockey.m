@@ -25,115 +25,126 @@
 
 #import "Jockey.h"
 
-@interface Jockey ()
-+ (id)sharedInstance;
-
-- (void)triggerEventFromWebView:(UIWebView*)webView withData:(NSDictionary*)envelope;
-- (void)triggerCallbackOnWebView:(UIWebView*)webView forMessage:(NSString*)messageId;
-- (void)triggerCallbackForMessage:(NSNumber*)messageId;
-@end
-
 @implementation Jockey
 
-+ (id)sharedInstance
-{
++ (id)sharedInstance {
     static dispatch_once_t once;
     static Jockey *sharedInstance;
     dispatch_once(&once, ^{
         sharedInstance = [[self alloc] init];
-        sharedInstance.messageCount = @0;
-        sharedInstance.listeners = [[NSMutableDictionary alloc] init];
-        sharedInstance.callbacks = [[NSMutableDictionary alloc] init];
     });
     return sharedInstance;
 }
 
-+ (void)on:(NSString*)type perform:(JockeyHandler)handler
-{
++ (void)on:(NSString *)type perform:(JockeyHandler)handler {
+    [[self sharedInstance] on:type perform:handler];
+}
+
++ (void)on:(NSString *)type performAsync:(JockeyAsyncHandler)handler {
+    [[self sharedInstance] on:type performAsync:handler];
+}
+
++ (void)off:(NSString *)type {
+    [[self sharedInstance] off:type];
+}
+
++ (void)send:(NSString *)type withPayload:(id)payload toWebView:(UIWebView *)webView {
+    [[self sharedInstance] send:type withPayload:payload toWebView:webView perform:nil];
+}
+
++ (void)send:(NSString *)type withPayload:(id)payload toWebView:(UIWebView *)webView perform:(void (^)())complete {
+    [[self sharedInstance] send:type withPayload:payload toWebView:webView perform:complete];
+}
+
++ (BOOL)webView:(UIWebView *)webView withUrl:(NSURL *)url {
+    return [[self sharedInstance] webView:webView withUrl:url];
+}
+
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        self.messageCount = @0;
+        self.listeners = [NSMutableDictionary new];
+        self.callbacks = [NSMutableDictionary new];
+    }
+    return self;
+}
+
+- (void)on:(NSString *)type perform:(JockeyHandler)handler {
     void (^ extended)(UIWebView *webView, NSDictionary *payload, void (^ complete)()) = ^(UIWebView *webView, NSDictionary *payload, void(^ complete)()) {
         handler(payload);
         complete();
     };
-    
+
     [self on:type performAsync:extended];
 }
 
-+ (void)on:(NSString *)type performAsync:(JockeyAsyncHandler)handler
-{
-    Jockey *instance = [Jockey sharedInstance];
-    
-    NSDictionary *listeners = [instance listeners];
-    
+- (void)on:(NSString *)type performAsync:(JockeyAsyncHandler)handler {
+    NSDictionary *listeners = [self listeners];
+
     NSMutableArray *listenerList = [listeners objectForKey:type];
-    
+
     if (listenerList == nil) {
         listenerList = [[NSMutableArray alloc] init];
-        
-        [instance.listeners setValue:listenerList forKey:type];
+
+        [self.listeners setValue:listenerList forKey:type];
     }
-    
+
     [listenerList addObject:handler];
 }
 
-+ (void)off:(NSString *)type {
-    Jockey *instance = [Jockey sharedInstance];
-    
-    NSMutableDictionary *listeners = [instance listeners];
+- (void)off:(NSString *)type {
+    NSMutableDictionary *listeners = [self listeners];
     [listeners removeObjectForKey:type];
 }
 
-+ (void)send:(NSString *)type withPayload:(id)payload toWebView:(UIWebView *)webView
-{
+- (void)send:(NSString *)type withPayload:(id)payload toWebView:(UIWebView *)webView {
     [self send:type withPayload:payload toWebView:webView perform:nil];
 }
 
-+ (void)send:(NSString *)type withPayload:(id)payload toWebView:(UIWebView *)webView perform:(void (^)())complete {
-    Jockey *jockey = [Jockey sharedInstance];
-    
-    NSNumber *messageId = jockey.messageCount;
-    
+- (void)send:(NSString *)type withPayload:(id)payload toWebView:(UIWebView *)webView perform:(void (^)())complete {
+    NSNumber *messageId = self.messageCount;
+
     if (complete != nil) {
-        [jockey.callbacks setValue:complete forKey:[messageId stringValue]];
+        [self.callbacks setValue:complete forKey:[messageId stringValue]];
     }
-    
+
     NSError *err;
     NSData *jsonData = [NSJSONSerialization dataWithJSONObject:payload options:NSJSONWritingPrettyPrinted error:&err];
     NSString *jsonString = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
     NSString *javascript = [NSString stringWithFormat:@"Jockey.trigger(\"%@\", %li, %@);", type, (long)[messageId integerValue], jsonString];
-    
+
     [webView stringByEvaluatingJavaScriptFromString:javascript];
-    
-    jockey.messageCount = @([jockey.messageCount integerValue] + 1);
+
+    self.messageCount = @([self.messageCount integerValue] + 1);
 }
 
-+ (BOOL)webView:(UIWebView*)webView withUrl:(NSURL*)url
-{
+- (BOOL)webView:(UIWebView *)webView withUrl:(NSURL *)url {
     if ( [[url scheme] isEqualToString:@"jockey"] )
     {
         NSString *eventType = [url host];
         NSString *messageId = [[url path] substringFromIndex:1];
         NSString *query = [url query];
         NSString *jsonString = [query stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
-        
+
         NSError *error;
         NSDictionary *JSON = [NSJSONSerialization JSONObjectWithData: [jsonString dataUsingEncoding:NSUTF8StringEncoding]
                                                              options: NSJSONReadingMutableContainers
                                                                error: &error];
-        
+
         if ([eventType isEqualToString:@"event"]) {
-            [[self sharedInstance] triggerEventFromWebView:webView withData:JSON];
+            [self triggerEventFromWebView:webView withData:JSON];
         } else if ([eventType isEqualToString:@"callback"]) {
-            [[self sharedInstance] triggerCallbackForMessage:@([messageId integerValue])];
+            [self triggerCallbackForMessage:@([messageId integerValue])];
         }
-        
+
         return NO;
     }
     return YES;
 }
 
-- (void)triggerEventFromWebView:(UIWebView*)webView withData:(NSDictionary*)envelope
-{
-    NSDictionary *listeners = [[Jockey sharedInstance] listeners];
+- (void)triggerEventFromWebView:(UIWebView *)webView withData:(NSDictionary *)envelope {
+    NSDictionary *listeners = [self listeners];
     
     NSString *messageId = [envelope objectForKey:@"id"];
     NSString *type = [envelope objectForKey:@"type"];
@@ -148,7 +159,7 @@
         executedCount += 1;
         
         if (executedCount >= [listenerList count]) {
-            [[Jockey sharedInstance] triggerCallbackOnWebView:webView forMessage:messageId];
+            [self triggerCallbackOnWebView:webView forMessage:messageId];
         }
     };
     
@@ -157,8 +168,7 @@
     }
 }
 
-- (void)triggerCallbackOnWebView:(UIWebView*)webView forMessage:(NSString*)messageId
-{
+- (void)triggerCallbackOnWebView:(UIWebView *)webView forMessage:(NSString *)messageId {
     NSString *javascript = [NSString stringWithFormat:@"Jockey.triggerCallback(\"%@\");", messageId];
     
     [webView stringByEvaluatingJavaScriptFromString:javascript];
